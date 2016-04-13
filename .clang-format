@@ -1,0 +1,12 @@
+BasedOnStyle: Google
+Language: Cpp
+IndentWidth: 4
+UseTab: Never
+ColumnLimit: 80
+AllowShortBlocksOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: false
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+BinPackArguments: true
+NamespaceIndentation: None
