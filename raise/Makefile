@@ -1,4 +1,4 @@
-CFLAGS = -m32 -Wall
+CFLAGS = -m32 -Wall -Wextra -Werror
 OBJECTS = raise.o elf_utils.o static_heap.o jmp_function.o err.o raw_syscalls.o raw_syscall.o
 
 raise: $(OBJECTS)

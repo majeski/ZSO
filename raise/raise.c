@@ -49,7 +49,7 @@ static void real_main() {
     Elf32_Ehdr elf_header;
     {
         ssize_t size = sizeof(Elf32_Ehdr);
-        CHECK_ERR(read(core_fd, (void *)&elf_header, size) == size);
+        safe_read(core_fd, (void *)&elf_header, size);
         check_header(&elf_header);
     }
 
@@ -58,13 +58,13 @@ static void real_main() {
     {
         ssize_t size = sizeof(Elf32_Phdr) * elf_header.e_phnum;
         program_hdrs = static_alloc(size);
-        CHECK_ERR(pread(core_fd, (void *)program_hdrs, size,
-                        elf_header.e_phoff) == size);
+        safe_pread(core_fd, (void *)program_hdrs, size, elf_header.e_phoff);
     }
 
     // get information from NT_NOTE
     struct elf_prstatus prstatus;
-    struct user_desc tls;
+    struct user_desc *tls;
+    int tls_num = 0;
     file_info *file_infos;
     int file_infos_num;
     {
@@ -74,7 +74,8 @@ static void real_main() {
         // get note header
         Elf32_Phdr *note_header =
             get_note_header(program_hdrs, elf_header.e_phnum);
-        get_notes(core_fd, note_header, &prstatus, &tls, &files_entry_offset);
+        get_notes(core_fd, note_header, &prstatus, &tls, &tls_num,
+                  &files_entry_offset);
 
         // get note description
         CHECK_ERR(lseek(core_fd, files_entry_offset, SEEK_SET) != -1);
@@ -106,7 +107,11 @@ static void real_main() {
 
     RAW_ASSERT(raw_syscall1(__NR_close, (int32_t)core_fd) != -1,
                "close failed");
-    raw_syscall1(__NR_set_thread_area, (int32_t)&tls);
+    int i;
+    for (i = 0; i < tls_num; i++) {
+        RAW_ASSERT(raw_syscall1(__NR_set_thread_area, (int32_t)(tls + i)) != -1,
+                   "set_thread_area failed");
+    }
     final_jump();
 }
 
@@ -154,12 +159,12 @@ static void map_files(int core_fd, file_info *infos, int infos_num) {
     }
     void *filename = raw_mmap(NULL, max_fname_len, PROT_READ | PROT_WRITE,
                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    RAW_ASSERT(filename != (void *)-1, "filename mmap failed");
+    RAW_ASSERT(filename != MAP_FAILED, "filename mmap failed");
 
     // actual mmap
     for (i = 0; i < infos_num; i++) {
-        raw_pread(core_fd, filename, infos[i].filename_len + 1,
-                  infos[i].filename_ofs);
+        raw_safe_pread(core_fd, filename, infos[i].filename_len + 1,
+                       infos[i].filename_ofs);
         int fd = raw_open((char *)filename, O_RDONLY);
         RAW_ASSERT(fd != -1, "open failed");
 

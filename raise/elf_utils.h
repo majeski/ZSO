@@ -5,6 +5,10 @@
 #include <linux/elf.h>
 #include <sys/procfs.h>
 
+extern void safe_read(int fd, void *buf, size_t count);
+extern void safe_pread(int fd, void *buf, size_t count, off_t offset);
+extern void raw_safe_pread(int fd, void *buf, size_t count, off_t offset);
+
 /*
  * NT_FILE note header, described here:
  * http://lxr.free-electrons.com/source/fs/binfmt_elf.c#L1515
@@ -52,8 +56,8 @@ extern ssize_t skip_note_section(int core_fd, off_t size);
 extern void *read_files_desc(int core_fd, off_t *files_desc_off);
 
 extern void get_notes(int core_fd, Elf32_Phdr *note_header,
-                      struct elf_prstatus *prstatus, struct user_desc *tls,
-                      off_t *files_entry_offset);
+                      struct elf_prstatus *prstatus, struct user_desc **tls,
+                      int *tls_num, off_t *files_entry_offset);
 
 extern void get_file_infos(char *note_desc, file_info infos[]);
 
