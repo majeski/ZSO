@@ -1,5 +1,5 @@
-#ifndef V2D_IDS_QUEUE__H
-#define V2D_IDS_QUEUE__H 
+#ifndef _V2D_IDS_QUEUE_H
+#define _V2D_IDS_QUEUE_H
 
 typedef struct {
     int id;

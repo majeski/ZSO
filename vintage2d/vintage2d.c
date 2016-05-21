@@ -84,7 +84,6 @@ static int __init v2d_init_module(void)
     return 0;
 
 err_class:
-    idr_destroy(&v2d_idr);
     class_destroy(v2d_class);
 err_chrdev_register:
     unregister_chrdev_region(dev_base, DEV_COUNT);
@@ -221,12 +220,12 @@ err_kmalloc:
 static void v2d_remove(struct pci_dev *pdev) {
     v2d_device *dev = pci_get_drvdata(pdev);
 
+    cdev_del(&dev->cdev);
+    device_destroy(v2d_class, dev_base + dev->minor);
+
     spin_lock(&idr_lock);
     idr_remove(&v2d_idr, dev->minor);
     spin_unlock(&idr_lock);
-
-    cdev_del(&dev->cdev);
-    device_destroy(v2d_class, dev_base + dev->minor);
 
     destroy_buffer(pdev, &dev->buffer);
     dma_pool_destroy(dev->dma_pool);
@@ -365,7 +364,7 @@ static int v2d_open(struct inode *inode, struct file *file)
     dev = idr_find(&v2d_idr, MINOR(inode->i_rdev));
     spin_unlock(&idr_lock);
     
-    if (dev == NULL) {
+    if (unlikely(dev == NULL)) {
         BUG_ON(dev == NULL);
         return -EIO;
     }
@@ -391,14 +390,13 @@ static long v2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     v2d_context *context = file->private_data;
     v2d_device *dev = context->v2d_dev;
 
+    if (unlikely(cmd != V2D_IOCTL_SET_DIMENSIONS)) {
+        return -ENOTTY;
+    }
+
     err = mutex_lock_interruptible(&context->dims_lock);
     if (unlikely(err)) {
         return err;
-    }
-
-    if (unlikely(cmd != V2D_IOCTL_SET_DIMENSIONS)) {
-        err = -ENOTTY;
-        goto end;
     }
 
     /* check if dimensions are already set */
@@ -421,6 +419,7 @@ static long v2d_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
     context->pages_vm = kmalloc(VINTAGE2D_PAGE_SIZE, GFP_KERNEL);
     if (unlikely(!context->pages_vm)) {
+        pr_err("kmalloc failed\n");
         err = -ENOMEM;
         goto end;
     }

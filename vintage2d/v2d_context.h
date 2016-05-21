@@ -1,5 +1,5 @@
-#ifndef V2D_CONTEXT
-#define V2D_CONTEXT
+#ifndef _V2D_CONTEXT_H
+#define _V2D_CONTEXT_H
 
 #include "v2d_device.h"
 

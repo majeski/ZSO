@@ -1,5 +1,5 @@
-#ifndef V2D_DEVICE
-#define V2D_DEVICE
+#ifndef _V2D_DEVICE_H
+#define _V2D_DEVICE_H
 
 #include "v2d_ids_queue.h"
 
