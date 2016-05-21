@@ -252,12 +252,12 @@ static irqreturn_t v2d_handler(int irq, void *data)
 static void v2d_tasklet(unsigned long d)
 {
     u32 cur_counter;
+    int wakeup_fsyncs = 0;
     v2d_device *dev = (v2d_device *) d;
     ids_queue *fsync_q = &dev->fsync_queue;
     ids_queue_elem *entry, *tmp;
 
-    spin_lock(&fsync_q->wait_q.lock);
-
+    spin_lock(&fsync_q->spinlock);
     cur_counter = ioread32(dev->bar0 + VINTAGE2D_COUNTER);
     if (cur_counter != fsync_q->last_woken) {
         list_for_each_entry_safe(entry, tmp, &fsync_q->ids_list, lhead) {
@@ -266,14 +266,16 @@ static void v2d_tasklet(unsigned long d)
             }
             fsync_q->last_woken = entry->id;
             entry->ready = 1;
-            wake_up_locked(&fsync_q->wait_q);
+            wakeup_fsyncs = 1;
             list_del(&entry->lhead);
         }
     }
-
     load_buf_tail(dev);
-    spin_unlock(&fsync_q->wait_q.lock);
+    spin_unlock(&fsync_q->spinlock);
 
+    if (wakeup_fsyncs) {
+        wake_up(&dev->fsync_queue.wait_q);
+    }
     wake_up(&dev->buf_queue);
 }
 
@@ -347,8 +349,12 @@ v2d_cleanup_device(struct pci_dev *pdev, v2d_device *data)
 
 static void delete_page_table(v2d_context *context);
 
-/* returns with obtained dev->buffer.lock or error caused by signal */
-static int wait_for_space(v2d_device *dev, int space);
+/* returns with obtained dev->buffer.lock or returns error caused by signal */
+static int wait_for_space_interruptible(v2d_device *dev, int space);
+static void wait_for_space(v2d_device *dev, int space);
+
+static void add_fsync_id(ids_queue *q, ids_queue_elem *elem);
+static void del_fsync_id(ids_queue *q, ids_queue_elem *elem);
 
 static int v2d_open(struct inode *inode, struct file *file)
 {
@@ -463,6 +469,17 @@ end:
 static int v2d_release(struct inode *inode, struct file *file)
 {
     v2d_context *context = file->private_data;
+    v2d_device *dev = context->v2d_dev;
+    ids_queue_elem list_elem;
+
+    wait_for_space(dev, 1);
+    add_fsync_id(&dev->fsync_queue, &list_elem);
+    add_cmd(&dev->buffer, VINTAGE2D_CMD_COUNTER(list_elem.id, 1));
+    save_buf_head(dev);
+    mutex_unlock(&dev->buffer.lock);
+
+    wait_event(dev->fsync_queue.wait_q, list_elem.ready);
+
     delete_page_table(context);
     kfree(context);
     return 0;
@@ -534,7 +551,7 @@ v2d_write(struct file *file, const char __user *in, size_t size, loff_t *d)
         return -EINVAL;
     }
 
-    err = wait_for_space(dev, 5);
+    err = wait_for_space_interruptible(dev, 5);
     if (IS_ERR_VALUE(err)) {
         return err;
     }
@@ -620,33 +637,46 @@ static int v2d_fsync(struct file *file, loff_t a, loff_t b, int datasync)
         return -EINVAL;
     }
 
-    err = wait_for_space(dev, 1);
+    err = wait_for_space_interruptible(dev, 1);
     if (IS_ERR_VALUE(err)) {
         return err;
     }
 
-    /* add itself to waiting fsyncs */
-    spin_lock_irq(&dev->fsync_queue.wait_q.lock);
-    dev->fsync_queue.cur = (dev->fsync_queue.cur + 1) % V2D_COUNTER_MAX;
-    list_elem.id = dev->fsync_queue.cur;
-    list_elem.ready = 0;
-    list_add_tail(&list_elem.lhead, &dev->fsync_queue.ids_list);
-
+    /* obtain id & write counter command */
+    add_fsync_id(&dev->fsync_queue, &list_elem);
     add_cmd(&dev->buffer, VINTAGE2D_CMD_COUNTER(list_elem.id, 1));
     save_buf_head(dev);
-
-    /* release buffer lock */
     mutex_unlock(&dev->buffer.lock);
 
     /* sleep on fsync queue */
-    err = wait_event_interruptible_locked_irq(
-        dev->fsync_queue.wait_q, list_elem.ready);
-    spin_unlock_irq(&dev->fsync_queue.wait_q.lock);
+    err = wait_event_interruptible(dev->fsync_queue.wait_q, list_elem.ready);
+    if (IS_ERR_VALUE(err)) {
+        del_fsync_id(&dev->fsync_queue, &list_elem);
+    }
 
     return err;
 }
 
-static int wait_for_space(v2d_device *dev, int space)
+static void add_fsync_id(ids_queue *q, ids_queue_elem *elem)
+{
+    spin_lock_irq(&q->spinlock);
+    q->cur = (q->cur + 1) % V2D_COUNTER_MAX;
+    elem->id = q->cur;
+    elem->ready = 0;
+    list_add_tail(&elem->lhead, &q->ids_list);
+    spin_unlock_irq(&q->spinlock);
+}
+
+static void del_fsync_id(ids_queue *q, ids_queue_elem *elem)
+{
+    spin_lock_irq(&q->spinlock);
+    if (!elem->ready) {
+        list_del(&elem->lhead);
+    }
+    spin_unlock_irq(&q->spinlock);
+}
+
+static int wait_for_space_interruptible(v2d_device *dev, int space)
 {
     int err;
     v2d_buffer *buf = &dev->buffer;
@@ -662,4 +692,16 @@ static int wait_for_space(v2d_device *dev, int space)
         mutex_lock(&buf->lock);
     }
     return 0;
+}
+
+static void wait_for_space(v2d_device *dev, int space)
+{
+    v2d_buffer *buf = &dev->buffer;
+
+    mutex_lock(&buf->lock);
+    while (buf_space(buf) < space) {
+        mutex_unlock(&buf->lock);
+        wait_event(dev->buf_queue, buf_space(buf) >= space);
+        mutex_lock(&buf->lock);
+    }
 }
