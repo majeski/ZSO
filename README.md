@@ -1,4 +1,4 @@
-### Advanced operating systems
+### Advanced Topics in Operating Systems
 ###### Faculty of Mathematics, Informatics and Mechanics, University of Warsaw, 2015/2016
 
 -------------
